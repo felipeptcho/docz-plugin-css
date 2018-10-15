@@ -9,9 +9,9 @@ import { getLocalIdent } from './get-local-ident'
  * Tests
  */
 
-type PreProcessor = 'postcss' | 'sass' | 'less' | 'stylus'
+type PreProcessor = 'default' | 'sass' | 'less' | 'stylus'
 const tests: Record<PreProcessor, RegExp> = {
-  postcss: /(\.module)?\.css$/,
+  default: /(\.module)?\.css$/,
   sass: /(\.module)?\.s(a|c)ss$/,
   less: /(\.module)?\.less$/,
   stylus: /(\.module)?\.styl(us)?$/,
@@ -25,11 +25,12 @@ export interface Opts {
   [key: string]: any
 }
 
-const getStyleLoaders = (loader: any, opts: Opts) => (
+const getStyleLoaders = (loader?: any, opts: Opts = {}) => (
   cssopts: any,
+  postcssopts: any,
   dev: boolean
 ) => {
-  return [
+  const result = [
     {
       loader: dev
         ? require.resolve('style-loader')
@@ -40,31 +41,23 @@ const getStyleLoaders = (loader: any, opts: Opts) => (
       options: cssopts,
     },
     {
-      loader,
-      options: opts,
+      loader: require.resolve('postcss-loader'),
+      options: postcssopts,
     },
   ]
+
+  if (loader) {
+    result.push({
+      loader,
+      options: opts,
+    })
+  }
+
+  return result
 }
 
 const loaders = {
-  postcss: (opts: Opts = { plugins: [] }) =>
-    getStyleLoaders(
-      require.resolve('postcss-loader'),
-      merge(opts, {
-        plugins: () => {
-          const defaultPlugins = [
-            require('postcss-flexbugs-fixes'),
-            require('autoprefixer')({
-              flexbox: 'no-2009',
-            }),
-          ]
-
-          return opts && opts.plugins && Array.isArray(opts.plugins)
-            ? opts.plugins.concat(defaultPlugins)
-            : defaultPlugins
-        },
-      })
-    ),
+  default: (opts: Opts = { plugins: [] }) => getStyleLoaders(),
 
   sass: (opts: Opts = {}) =>
     getStyleLoaders(
@@ -91,7 +84,7 @@ const applyRule = (
   cssmodules: boolean | undefined,
   dev: boolean
 ) => {
-  const { preprocessor, cssOpts, loaderOpts, ruleOpts } = opts
+  const { preprocessor, cssOpts, postcssOpts, loaderOpts, ruleOpts } = opts
 
   const loaderfn = loaders[preprocessor as PreProcessor]
   const loader = loaderfn(loaderOpts)
@@ -101,24 +94,50 @@ const applyRule = (
     sourceMap: !dev,
     ...(cssmodules && { getLocalIdent }),
   })
+  const postcssoptions = merge(postcssOpts, {
+    plugins: (loader: any) => {
+      let plugins = [
+        require('postcss-flexbugs-fixes'),
+        require('autoprefixer')({
+          flexbox: 'no-2009',
+        }),
+      ]
+
+      if (postcssOpts && postcssOpts.plugins) {
+        if (
+          Object.prototype.toString.call(postcssOpts.plugins) ===
+          '[object Function]'
+        ) {
+          postcssOpts.plugins = postcssOpts.plugins(loader)
+        }
+
+        if (Array.isArray(postcssOpts.plugins)) {
+          plugins = postcssOpts.plugins.concat(plugins)
+        }
+      }
+
+      return plugins
+    },
+  })
 
   return {
     test: tests[preprocessor as PreProcessor],
-    use: loader(cssoptions, dev),
+    use: loader(cssoptions, postcssoptions, dev),
     ...ruleOpts,
   }
 }
 
 export interface CSSPluginOptions {
-  preprocessor?: 'postcss' | 'sass' | 'less' | 'stylus'
+  preprocessor?: 'default' | 'sass' | 'less' | 'stylus'
   cssmodules?: boolean
   loaderOpts?: Opts
   cssOpts?: Opts
+  postcssOpts?: Opts
   ruleOpts?: Opts
 }
 
 const defaultOpts: Record<string, any> = {
-  preprocessor: 'postcss',
+  preprocessor: 'default',
   cssmodules: false,
   loadersOpts: {},
   cssOpts: {},
@@ -131,7 +150,7 @@ export const css = (opts: CSSPluginOptions = defaultOpts) =>
       config.module.rules.push(applyRule(opts, opts.cssmodules, dev))
 
       if (!dev) {
-        const test = tests[opts.preprocessor || ('postcss' as PreProcessor)]
+        const test = tests[opts.preprocessor || ('default' as PreProcessor)]
         const minimizer = config.optimization.minimizer || []
         const splitChunks = { ...config.optimization.splitChunks }
 
